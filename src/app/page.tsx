@@ -37,6 +37,8 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sliderMin = 1;
+  const sliderMax = Math.max(sliderMin, maxColorCount);
 
   const processImage = useCallback(
     async (file: File) => {
@@ -63,8 +65,11 @@ export default function Home() {
                 canvas.width,
                 canvas.height,
               );
-              const detectedMax = estimatePaletteCapacity(imageData);
-              const nextCount = Math.min(colorCount, detectedMax);
+              const detectedMax = Math.max(sliderMin, estimatePaletteCapacity(imageData));
+              const nextCount = Math.max(
+                sliderMin,
+                Math.min(colorCount, detectedMax),
+              );
               setMaxColorCount(detectedMax);
               setColorCount(nextCount);
               setIsExtracting(true);
@@ -180,7 +185,7 @@ export default function Home() {
 
   const handleColorCountChange = useCallback(
     (newCount: number) => {
-      const nextCount = Math.min(newCount, maxColorCount);
+      const nextCount = Math.max(sliderMin, Math.min(newCount, maxColorCount));
       setColorCount(nextCount);
       if (canvasRef.current && image) {
         const canvas = canvasRef.current;
@@ -196,7 +201,7 @@ export default function Home() {
         }
       }
     },
-    [image, maxColorCount],
+    [image, maxColorCount, sliderMin],
   );
 
   return (
@@ -296,8 +301,8 @@ export default function Home() {
                   <Slider
                     value={[colorCount]}
                     onValueChange={([v]) => handleColorCountChange(v)}
-                    min={Math.min(3, maxColorCount)}
-                    max={maxColorCount}
+                    min={sliderMin}
+                    max={sliderMax}
                     step={1}
                     className="w-28"
                   />
