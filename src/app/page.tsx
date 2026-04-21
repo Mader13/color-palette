@@ -511,12 +511,13 @@ export default function Home() {
       {/* Footer */}
       <footer className="w-full px-6 py-5 mt-auto">
         <div className="max-w-5xl mx-auto">
-          <p className="text-[11px] text-white/15">
+          <p className="text-[11px] text-white/20">
             Сделано{" "}
             <a
               href="https://minti-dev.vercel.app/"
               target="_blank"
               rel="noopener noreferrer"
+              className="text-white/55 underline underline-offset-2 decoration-white/25 hover:text-white/90 hover:decoration-white/70 transition-colors"
             >
               Minti
             </a>

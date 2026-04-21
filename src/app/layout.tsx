@@ -25,11 +25,6 @@ export const metadata: Metadata = {
     "color picker",
   ],
   authors: [{ name: "Chromatic" }],
-  icons: {
-    icon: "/icon.png",
-    shortcut: "/icon.png",
-    apple: "/icon.png",
-  },
 };
 
 export default function RootLayout({
@@ -39,6 +34,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        <link rel="icon" href="./icon.png" type="image/png" />
+        <link rel="shortcut icon" href="./icon.png" type="image/png" />
+        <link rel="apple-touch-icon" href="./icon.png" type="image/png" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
