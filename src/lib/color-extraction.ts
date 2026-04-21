@@ -90,7 +90,11 @@ function quantizeChannel(value: number, bucketSize: number): number {
   return Math.min(255, Math.round(value / bucketSize) * bucketSize);
 }
 
-function createBuckets(pixels: RGB[], bucketSize: number, minBucketShare = 0): WeightedColor[] {
+function createBuckets(
+  pixels: RGB[],
+  bucketSize: number,
+  minBucketShare = 0,
+): WeightedColor[] {
   const histogram = new Map<string, ColorBucket>();
   const minBucketCount = Math.max(1, Math.ceil(pixels.length * minBucketShare));
 
@@ -173,6 +177,7 @@ function getDominantClusters(pixels: RGB[]): WeightedColor[] {
 
   const buckets = createBuckets(pixels, 18, 0.0015);
   const clusters: WeightedColor[] = [];
+
   for (const bucket of buckets) {
     mergeIntoClusters(clusters, bucket);
   }
@@ -187,7 +192,24 @@ export function estimatePaletteCapacity(imageData: ImageData): number {
   if (sampledPixels.length === 0) return 1;
 
   const dominantClusters = getDominantClusters(sampledPixels);
-  return Math.max(1, Math.min(dominantClusters.length || 1, 12));
+  if (dominantClusters.length <= 1) {
+    return dominantClusters.length || 1;
+  }
+
+  const total = dominantClusters.reduce((sum, cluster) => sum + cluster.count, 0);
+  const shares = dominantClusters.map(cluster => cluster.count / total);
+
+  const entropy = shares.reduce((sum, share) => {
+    return share > 0 ? sum - share * Math.log(share) : sum;
+  }, 0);
+
+  let effectiveCount = Math.ceil(Math.exp(entropy));
+
+  if (effectiveCount === 1 && shares[1] >= 0.05) {
+    effectiveCount = 2;
+  }
+
+  return Math.max(1, Math.min(dominantClusters.length, effectiveCount));
 }
 
 function nearestColorIndex(color: RGB, palette: RGB[]): number {
