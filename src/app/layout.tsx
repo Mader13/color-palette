@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Chromatic — Image to Color Palette",
+  title: "Image to Color Palette",
   description:
-    "Extract beautiful color palettes from any image. Drop an image and get dominant colors with HEX codes instantly. All processing happens locally in your browser.",
+    "Extract color palettes from any image. Drop an image and get dominant colors with HEX codes instantly. All processing happens locally in your browser.",
   keywords: [
     "color palette",
     "image colors",
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     "design tool",
     "color picker",
   ],
-  authors: [{ name: "Chromatic" }],
+  authors: [{ name: "Minti" }],
 };
 
 export default function RootLayout({
