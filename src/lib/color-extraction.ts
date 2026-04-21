@@ -91,6 +91,76 @@ function luminance(r: number, g: number, b: number): number {
   return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
 }
 
+interface QuantizedBucket extends RGB {
+  count: number;
+}
+
+function mergeBucket(clusters: QuantizedBucket[], bucket: QuantizedBucket, threshold: number): void {
+  let bestIndex = -1;
+  let bestDistance = threshold;
+
+  for (let i = 0; i < clusters.length; i++) {
+    const dist = colorDistance(clusters[i], bucket);
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestIndex = i;
+    }
+  }
+
+  if (bestIndex === -1) {
+    clusters.push({ ...bucket });
+    return;
+  }
+
+  const cluster = clusters[bestIndex];
+  const total = cluster.count + bucket.count;
+  cluster.r = Math.round((cluster.r * cluster.count + bucket.r * bucket.count) / total);
+  cluster.g = Math.round((cluster.g * cluster.count + bucket.g * bucket.count) / total);
+  cluster.b = Math.round((cluster.b * cluster.count + bucket.b * bucket.count) / total);
+  cluster.count = total;
+}
+
+export function estimatePaletteCapacity(imageData: ImageData): number {
+  const data = imageData.data;
+  const totalPixels = data.length / 4;
+  const step = Math.max(1, Math.floor(totalPixels / 4000));
+  const bucketSize = 24;
+  const buckets = new Map<string, QuantizedBucket>();
+  let sampled = 0;
+
+  for (let p = 0; p < totalPixels; p += step) {
+    const i = p * 4;
+    if (data[i + 3] < 128) continue;
+
+    sampled++;
+    const r = Math.min(255, Math.round(data[i] / bucketSize) * bucketSize);
+    const g = Math.min(255, Math.round(data[i + 1] / bucketSize) * bucketSize);
+    const b = Math.min(255, Math.round(data[i + 2] / bucketSize) * bucketSize);
+    const key = `${r}-${g}-${b}`;
+    const bucket = buckets.get(key);
+
+    if (bucket) {
+      bucket.count++;
+    } else {
+      buckets.set(key, { r, g, b, count: 1 });
+    }
+  }
+
+  if (sampled === 0) return 1;
+
+  const minCount = Math.max(4, Math.ceil(sampled * 0.005));
+  const clusters: QuantizedBucket[] = [];
+  const sortedBuckets = [...buckets.values()]
+    .filter(bucket => bucket.count >= minCount)
+    .sort((a, b) => b.count - a.count);
+
+  for (const bucket of sortedBuckets) {
+    mergeBucket(clusters, bucket, 28);
+  }
+
+  return Math.max(1, clusters.length);
+}
+
 export function extractPalette(imageData: ImageData, colorCount: number = 6): ColorSwatch[] {
   const pixels = getPixelData(imageData);
   

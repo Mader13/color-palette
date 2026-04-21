@@ -13,7 +13,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { extractPalette, getContrastColor } from "@/lib/color-extraction";
+import {
+  estimatePaletteCapacity,
+  extractPalette,
+  getContrastColor,
+} from "@/lib/color-extraction";
 import { useToast } from "@/hooks/use-toast";
 
 interface ColorSwatch {
@@ -27,6 +31,7 @@ export default function Home() {
   const [palette, setPalette] = useState<ColorSwatch[]>([]);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [colorCount, setColorCount] = useState(6);
+  const [maxColorCount, setMaxColorCount] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -58,9 +63,13 @@ export default function Home() {
                 canvas.width,
                 canvas.height,
               );
+              const detectedMax = estimatePaletteCapacity(imageData);
+              const nextCount = Math.min(colorCount, detectedMax);
+              setMaxColorCount(detectedMax);
+              setColorCount(nextCount);
               setIsExtracting(true);
               setTimeout(() => {
-                const result = extractPalette(imageData, colorCount);
+                const result = extractPalette(imageData, nextCount);
                 setPalette(result);
                 setIsExtracting(false);
               }, 350);
@@ -162,6 +171,8 @@ export default function Home() {
     setImage(null);
     setPalette([]);
     setCopiedIndex(null);
+    setColorCount(6);
+    setMaxColorCount(1);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -169,7 +180,8 @@ export default function Home() {
 
   const handleColorCountChange = useCallback(
     (newCount: number) => {
-      setColorCount(newCount);
+      const nextCount = Math.min(newCount, maxColorCount);
+      setColorCount(nextCount);
       if (canvasRef.current && image) {
         const canvas = canvasRef.current;
         const ctx = canvas.getContext("2d");
@@ -177,14 +189,14 @@ export default function Home() {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           setIsExtracting(true);
           setTimeout(() => {
-            const result = extractPalette(imageData, newCount);
+            const result = extractPalette(imageData, nextCount);
             setPalette(result);
             setIsExtracting(false);
           }, 350);
         }
       }
     },
-    [image],
+    [image, maxColorCount],
   );
 
   return (
@@ -284,8 +296,8 @@ export default function Home() {
                   <Slider
                     value={[colorCount]}
                     onValueChange={([v]) => handleColorCountChange(v)}
-                    min={3}
-                    max={12}
+                    min={Math.min(3, maxColorCount)}
+                    max={maxColorCount}
                     step={1}
                     className="w-28"
                   />
