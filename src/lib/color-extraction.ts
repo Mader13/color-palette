@@ -10,6 +10,16 @@ interface ColorSwatch {
   percentage: number;
 }
 
+interface WeightedColor extends RGB {
+  count: number;
+}
+
+interface ColorBucket extends WeightedColor {
+  sumR: number;
+  sumG: number;
+  sumB: number;
+}
+
 function rgbToHex(r: number, g: number, b: number): string {
   return '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
@@ -17,69 +27,46 @@ function rgbToHex(r: number, g: number, b: number): string {
 function getPixelData(imageData: ImageData): RGB[] {
   const pixels: RGB[] = [];
   const data = imageData.data;
+
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
     const a = data[i + 3];
-    // Skip transparent and near-white/near-black pixels for better palette
+
     if (a < 128) continue;
     pixels.push({ r, g, b });
   }
+
   return pixels;
 }
 
-function getColorRange(pixels: RGB[]): { channel: keyof RGB; range: number } {
-  let rMin = 255, rMax = 0, gMin = 255, gMax = 0, bMin = 255, bMax = 0;
+function samplePixels(imageData: ImageData, maxSamples: number = 5000): RGB[] {
+  const pixels: RGB[] = [];
+  const { data, width, height } = imageData;
+  const totalPixels = width * height;
+  const stride = Math.max(1, Math.ceil(Math.sqrt(totalPixels / maxSamples)));
 
-  for (const pixel of pixels) {
-    if (pixel.r < rMin) rMin = pixel.r;
-    if (pixel.r > rMax) rMax = pixel.r;
-    if (pixel.g < gMin) gMin = pixel.g;
-    if (pixel.g > gMax) gMax = pixel.g;
-    if (pixel.b < bMin) bMin = pixel.b;
-    if (pixel.b > bMax) bMax = pixel.b;
-  }
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const i = (y * width + x) * 4;
+      const a = data[i + 3];
+      if (a < 128) continue;
 
-  const rRange = rMax - rMin;
-  const gRange = gMax - gMin;
-  const bRange = bMax - bMin;
-
-  if (rRange >= gRange && rRange >= bRange) return { channel: 'r', range: rRange };
-  if (gRange >= rRange && gRange >= bRange) return { channel: 'g', range: gRange };
-  return { channel: 'b', range: bRange };
-}
-
-function medianCut(pixels: RGB[], depth: number): RGB[] {
-  if (depth === 0 || pixels.length === 0) {
-    // Return average color
-    const avg: RGB = { r: 0, g: 0, b: 0 };
-    for (const pixel of pixels) {
-      avg.r += pixel.r;
-      avg.g += pixel.g;
-      avg.b += pixel.b;
+      pixels.push({
+        r: data[i],
+        g: data[i + 1],
+        b: data[i + 2],
+      });
     }
-    const count = pixels.length || 1;
-    return [{
-      r: Math.round(avg.r / count),
-      g: Math.round(avg.g / count),
-      b: Math.round(avg.b / count),
-    }];
   }
 
-  const { channel } = getColorRange(pixels);
-  const sorted = [...pixels].sort((a, b) => a[channel] - b[channel]);
-  const mid = Math.floor(sorted.length / 2);
-
-  return [
-    ...medianCut(sorted.slice(0, mid), depth - 1),
-    ...medianCut(sorted.slice(mid), depth - 1),
-  ];
+  return pixels;
 }
 
 function colorDistance(a: RGB, b: RGB): number {
   return Math.sqrt(
-    (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2
+    (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2,
   );
 }
 
@@ -88,19 +75,80 @@ function luminance(r: number, g: number, b: number): number {
     c = c / 255;
     return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   });
+
   return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
 }
 
-interface QuantizedBucket extends RGB {
-  count: number;
+function saturation({ r, g, b }: RGB): number {
+  const max = Math.max(r, g, b) / 255;
+  const min = Math.min(r, g, b) / 255;
+  if (max === 0) return 0;
+  return (max - min) / max;
 }
 
-function mergeBucket(clusters: QuantizedBucket[], bucket: QuantizedBucket, threshold: number): void {
+function quantizeChannel(value: number, bucketSize: number): number {
+  return Math.min(255, Math.round(value / bucketSize) * bucketSize);
+}
+
+function createBuckets(pixels: RGB[], bucketSize: number, minBucketShare = 0): WeightedColor[] {
+  const histogram = new Map<string, ColorBucket>();
+  const minBucketCount = Math.max(1, Math.ceil(pixels.length * minBucketShare));
+
+  for (const pixel of pixels) {
+    const r = quantizeChannel(pixel.r, bucketSize);
+    const g = quantizeChannel(pixel.g, bucketSize);
+    const b = quantizeChannel(pixel.b, bucketSize);
+    const key = `${r}-${g}-${b}`;
+    const bucket = histogram.get(key);
+
+    if (bucket) {
+      bucket.count++;
+      bucket.sumR += pixel.r;
+      bucket.sumG += pixel.g;
+      bucket.sumB += pixel.b;
+    } else {
+      histogram.set(key, {
+        r,
+        g,
+        b,
+        count: 1,
+        sumR: pixel.r,
+        sumG: pixel.g,
+        sumB: pixel.b,
+      });
+    }
+  }
+
+  return [...histogram.values()]
+    .filter(bucket => bucket.count >= minBucketCount)
+    .map(bucket => ({
+      r: Math.round(bucket.sumR / bucket.count),
+      g: Math.round(bucket.sumG / bucket.count),
+      b: Math.round(bucket.sumB / bucket.count),
+      count: bucket.count,
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function shouldMergeColors(a: RGB, b: RGB): boolean {
+  const satAvg = (saturation(a) + saturation(b)) / 2;
+  const dist = colorDistance(a, b);
+  const lumDiff = Math.abs(luminance(a.r, a.g, a.b) - luminance(b.r, b.g, b.b)) * 255;
+
+  const maxDistance = satAvg < 0.12 ? 18 : satAvg < 0.35 ? 24 : 30;
+  const maxLuminanceDiff = satAvg < 0.12 ? 18 : 28;
+
+  return dist <= maxDistance && lumDiff <= maxLuminanceDiff;
+}
+
+function mergeIntoClusters(clusters: WeightedColor[], color: WeightedColor): void {
   let bestIndex = -1;
-  let bestDistance = threshold;
+  let bestDistance = Infinity;
 
   for (let i = 0; i < clusters.length; i++) {
-    const dist = colorDistance(clusters[i], bucket);
+    if (!shouldMergeColors(clusters[i], color)) continue;
+
+    const dist = colorDistance(clusters[i], color);
     if (dist < bestDistance) {
       bestDistance = dist;
       bestIndex = i;
@@ -108,98 +156,143 @@ function mergeBucket(clusters: QuantizedBucket[], bucket: QuantizedBucket, thres
   }
 
   if (bestIndex === -1) {
-    clusters.push({ ...bucket });
+    clusters.push({ ...color });
     return;
   }
 
   const cluster = clusters[bestIndex];
-  const total = cluster.count + bucket.count;
-  cluster.r = Math.round((cluster.r * cluster.count + bucket.r * bucket.count) / total);
-  cluster.g = Math.round((cluster.g * cluster.count + bucket.g * bucket.count) / total);
-  cluster.b = Math.round((cluster.b * cluster.count + bucket.b * bucket.count) / total);
+  const total = cluster.count + color.count;
+  cluster.r = Math.round((cluster.r * cluster.count + color.r * color.count) / total);
+  cluster.g = Math.round((cluster.g * cluster.count + color.g * color.count) / total);
+  cluster.b = Math.round((cluster.b * cluster.count + color.b * color.count) / total);
   cluster.count = total;
 }
 
+function getDominantClusters(pixels: RGB[]): WeightedColor[] {
+  if (pixels.length === 0) return [];
+
+  const buckets = createBuckets(pixels, 18, 0.0015);
+  const clusters: WeightedColor[] = [];
+  for (const bucket of buckets) {
+    mergeIntoClusters(clusters, bucket);
+  }
+
+  return clusters
+    .filter(cluster => cluster.count / pixels.length >= 0.002)
+    .sort((a, b) => b.count - a.count);
+}
+
 export function estimatePaletteCapacity(imageData: ImageData): number {
-  const data = imageData.data;
-  const totalPixels = data.length / 4;
-  const step = Math.max(1, Math.floor(totalPixels / 4000));
-  const bucketSize = 24;
-  const buckets = new Map<string, QuantizedBucket>();
-  let sampled = 0;
+  const sampledPixels = samplePixels(imageData);
+  if (sampledPixels.length === 0) return 1;
 
-  for (let p = 0; p < totalPixels; p += step) {
-    const i = p * 4;
-    if (data[i + 3] < 128) continue;
+  const dominantClusters = getDominantClusters(sampledPixels);
+  return Math.max(1, Math.min(dominantClusters.length || 1, 12));
+}
 
-    sampled++;
-    const r = Math.min(255, Math.round(data[i] / bucketSize) * bucketSize);
-    const g = Math.min(255, Math.round(data[i + 1] / bucketSize) * bucketSize);
-    const b = Math.min(255, Math.round(data[i + 2] / bucketSize) * bucketSize);
-    const key = `${r}-${g}-${b}`;
-    const bucket = buckets.get(key);
+function nearestColorIndex(color: RGB, palette: RGB[]): number {
+  let minDist = Infinity;
+  let minIdx = 0;
 
-    if (bucket) {
-      bucket.count++;
-    } else {
-      buckets.set(key, { r, g, b, count: 1 });
+  for (let i = 0; i < palette.length; i++) {
+    const dist = colorDistance(color, palette[i]);
+    if (dist < minDist) {
+      minDist = dist;
+      minIdx = i;
     }
   }
 
-  if (sampled === 0) return 1;
+  return minIdx;
+}
 
-  const minCount = Math.max(4, Math.ceil(sampled * 0.005));
-  const clusters: QuantizedBucket[] = [];
-  const sortedBuckets = [...buckets.values()]
-    .filter(bucket => bucket.count >= minCount)
-    .sort((a, b) => b.count - a.count);
+function pickInitialCenters(buckets: WeightedColor[], colorCount: number): RGB[] {
+  const centers: RGB[] = [];
+  const sortedByCount = [...buckets].sort((a, b) => b.count - a.count);
 
-  for (const bucket of sortedBuckets) {
-    mergeBucket(clusters, bucket, 28);
+  if (sortedByCount.length === 0) return centers;
+  centers.push(sortedByCount[0]);
+
+  while (centers.length < colorCount && centers.length < buckets.length) {
+    let bestBucket: WeightedColor | null = null;
+    let bestScore = -Infinity;
+
+    for (const bucket of buckets) {
+      if (centers.some(center => colorDistance(center, bucket) < 18)) continue;
+
+      const nearestDistance = Math.min(...centers.map(center => colorDistance(center, bucket)));
+      const vividness = 0.65 + saturation(bucket) * 1.35;
+      const score = nearestDistance * vividness * Math.sqrt(bucket.count);
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestBucket = bucket;
+      }
+    }
+
+    if (!bestBucket) break;
+    centers.push({ r: bestBucket.r, g: bestBucket.g, b: bestBucket.b });
   }
 
-  return Math.max(1, clusters.length);
+  return centers;
+}
+
+function refineCenters(buckets: WeightedColor[], centers: RGB[], iterations = 8): RGB[] {
+  let currentCenters = centers;
+
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const sums = currentCenters.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+
+    for (const bucket of buckets) {
+      const index = nearestColorIndex(bucket, currentCenters);
+      sums[index].r += bucket.r * bucket.count;
+      sums[index].g += bucket.g * bucket.count;
+      sums[index].b += bucket.b * bucket.count;
+      sums[index].count += bucket.count;
+    }
+
+    currentCenters = currentCenters.map((center, i) => {
+      const sum = sums[i];
+      if (sum.count === 0) return center;
+
+      return {
+        r: Math.round(sum.r / sum.count),
+        g: Math.round(sum.g / sum.count),
+        b: Math.round(sum.b / sum.count),
+      };
+    });
+  }
+
+  return currentCenters;
+}
+
+function fillMissingColors(colors: RGB[], buckets: WeightedColor[], colorCount: number): RGB[] {
+  const result = [...colors];
+
+  for (const bucket of buckets) {
+    if (result.length >= colorCount) break;
+    if (result.some(color => colorDistance(color, bucket) < 18)) continue;
+    result.push({ r: bucket.r, g: bucket.g, b: bucket.b });
+  }
+
+  return result;
 }
 
 export function extractPalette(imageData: ImageData, colorCount: number = 6): ColorSwatch[] {
   const pixels = getPixelData(imageData);
-  
+
   if (pixels.length === 0) return [];
 
-  // Calculate depth needed for desired color count (2^depth = colorCount)
-  const depth = Math.ceil(Math.log2(colorCount));
-  let colors = medianCut(pixels, depth);
-
-  // Sort by luminance for a pleasing visual order
-  colors.sort((a, b) => luminance(b.r, b.g, b.b) - luminance(a.r, a.g, a.b));
-
-  // Remove very similar colors
-  const filtered: RGB[] = [colors[0]];
-  for (let i = 1; i < colors.length; i++) {
-    const isSimilar = filtered.some(c => colorDistance(c, colors[i]) < 25);
-    if (!isSimilar) {
-      filtered.push(colors[i]);
-    }
-  }
-
-  // If we lost too many, fill back from original
-  for (const color of colors) {
-    if (filtered.length >= colorCount) break;
-    if (!filtered.some(c => colorDistance(c, color) < 15)) {
-      filtered.push(color);
-    }
-  }
-
-  // Trim to exact count
-  const finalColors = filtered.slice(0, colorCount);
-
-  // Calculate percentage by nearest-neighbor
+  const colorBuckets = createBuckets(pixels, 12, 0.0005);
+  const initialCenters = pickInitialCenters(colorBuckets, colorCount);
+  const refinedCenters = refineCenters(colorBuckets, initialCenters);
+  const finalColors = fillMissingColors(refinedCenters, colorBuckets, colorCount).slice(0, colorCount);
   const totalPixels = pixels.length;
-  const buckets = new Array(finalColors.length).fill(0);
+  const pixelCounts = new Array(finalColors.length).fill(0);
 
   for (const pixel of pixels) {
     let minDist = Infinity;
     let minIdx = 0;
+
     for (let i = 0; i < finalColors.length; i++) {
       const dist = colorDistance(pixel, finalColors[i]);
       if (dist < minDist) {
@@ -207,16 +300,16 @@ export function extractPalette(imageData: ImageData, colorCount: number = 6): Co
         minIdx = i;
       }
     }
-    buckets[minIdx]++;
+
+    pixelCounts[minIdx]++;
   }
 
   const result: ColorSwatch[] = finalColors.map((color, i) => ({
     hex: rgbToHex(color.r, color.g, color.b),
     rgb: color,
-    percentage: Math.round((buckets[i] / totalPixels) * 100),
+    percentage: Math.round((pixelCounts[i] / totalPixels) * 100),
   }));
 
-  // Sort by percentage descending
   result.sort((a, b) => b.percentage - a.percentage);
 
   return result;
